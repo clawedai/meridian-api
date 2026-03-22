@@ -1,5 +1,8 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "nixpacksVersion": "latest"
+  },
   "deploy": {
     "startCommand": "python main.py",
     "healthcheckPath": "/health",
