@@ -1,6 +1,6 @@
 services:
   - name: meridian-api
-    type: web_service
+    type: web
     runtime: python
     region: oregon
     buildCommand: pip install -r requirements.txt
