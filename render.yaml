@@ -1,0 +1,25 @@
+services:
+  - name: meridian-api
+    type: web_service
+    runtime: python
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    autoDeploy: true
+    envVars:
+      - key: SUPABASE_URL
+        value: https://osdbckbblcdtwtnjqmii.supabase.co
+      - key: SUPABASE_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: FROM_EMAIL
+        value: Almanac <alerts@resend.dev>
+      - key: ENVIRONMENT
+        value: production
