@@ -1,0 +1,8 @@
+[phases.setup]
+nixpkgs_archive = "https://github.com/NixOS/nixpkgs/archive/nixos-24.05.tar.gz"
+
+[phases.install]
+cmds = ["pip install -r requirements.txt"]
+
+[start]
+cmd = ["python", "main.py"]
