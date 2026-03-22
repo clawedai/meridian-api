@@ -9,8 +9,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy app
 COPY . .
 
-# Expose port
-EXPOSE 8000
+# Railway uses PORT env var (default 8080)
+ENV PORT=8000
+EXPOSE ${PORT:-8000}
 
-# Run
-CMD ["python", "main.py"]
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT:-8000}/health')" || exit 1
+
+# Run with PORT env var for Railway compatibility
+CMD ["sh", "-c", "python main.py"]
