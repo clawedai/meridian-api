@@ -106,6 +106,44 @@ async def list_prospects(
         return prospects
 
 
+@router.get("/hot")
+async def list_hot_prospects(
+    tier: str = "hot",
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Get all prospects filtered by tier with their intent scores.
+    Frontend-facing endpoint at GET /prospects/hot?tier=hot
+    """
+    user_id = current_user["id"]
+    headers = _get_headers()
+
+    # Get all prospects for user
+    url = f"{settings.SUPABASE_URL}/rest/v1/prospects?user_id=eq.{user_id}&suppressed=eq.false&select=*"
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(url, headers=headers)
+        if response.status_code != 200:
+            raise HTTPException(status_code=500, detail="Failed to fetch prospects")
+        all_prospects = response.json()
+
+    scored_prospects = []
+    for p in all_prospects:
+        score_data = await _fetch_signal(settings.SUPABASE_URL, headers, "intent_scores", p["id"])
+        if score_data and score_data.get("tier") == tier:
+            scored_prospects.append({
+                **p,
+                "intent_score": score_data,
+                "score_description": get_score_description(
+                    score_data.get("score", 0),
+                    score_data.get("score_breakdown", {})
+                ),
+            })
+
+    # Sort by score descending
+    scored_prospects.sort(key=lambda x: x["intent_score"].get("score", 0), reverse=True)
+    return scored_prospects
+
+
 @router.post("", response_model=ProspectResponse, status_code=201)
 async def create_prospect(
     prospect: ProspectCreate,
@@ -446,57 +484,6 @@ async def generate_email_draft(
     return email
 
 
-@router.get("/{prospect_id}/hot-prospects")
-async def get_hot_prospects(
-    tier: str = "hot",
-    current_user: dict = Depends(get_current_user),
-):
-    """
-    Get prospects by tier (hot/warm/cold).
-    Returns prospects with their signals and scores.
-    """
-    user_id = current_user["id"]
-    headers = _get_headers()
-
-    # Get all prospects for user
-    url = f"{settings.SUPABASE_URL}/rest/v1/prospects?user_id=eq.{user_id}&suppressed=eq.false&select=*"
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(url, headers=headers)
-        if response.status_code != 200:
-            raise HTTPException(status_code=500, detail="Failed to fetch prospects")
-
-        all_prospects = response.json()
-
-    hot_prospects = []
-    for p in all_prospects:
-        score_data = await _fetch_signal(settings.SUPABASE_URL, headers, "intent_scores", p["id"])
-        if score_data and score_data.get("tier") == tier:
-            # Fetch pain points for context
-            pain_url = f"{settings.SUPABASE_URL}/rest/v1/pain_points?prospect_id=eq.{p['id']}&order=extracted_at.desc&limit=5"
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                pain_resp = await client.get(pain_url, headers=headers)
-                pain_points = pain_resp.json() if pain_resp.status_code == 200 else []
-
-            # Get latest draft
-            draft_url = f"{settings.SUPABASE_URL}/rest/v1/draft_emails?prospect_id=eq.{p['id']}&approved=eq.false&sent=eq.false&order=generated_at.desc&limit=1"
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                draft_resp = await client.get(draft_url, headers=headers)
-                drafts = draft_resp.json() if draft_resp.status_code == 200 else []
-
-            hot_prospects.append({
-                **p,
-                "intent_score": score_data,
-                "pain_points": pain_points,
-                "draft_email": drafts[0] if drafts else None,
-                "score_description": get_score_description(
-                    score_data.get("score", 0),
-                    score_data.get("score_breakdown", {})
-                ),
-            })
-
-    # Sort by score descending
-    hot_prospects.sort(key=lambda x: x["intent_score"].get("score", 0), reverse=True)
-    return hot_prospects
 
 
 # =============================================
