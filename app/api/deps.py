@@ -388,6 +388,8 @@ class TableOperationsAsync:
             response = await http.post(self.base_url, json=data, headers=headers)
             response.raise_for_status()
             if response.status_code in [200, 201]:
+                if not response.text.strip():
+                    return []  # Empty response is valid
                 return response.json()
             raise Exception(f"Insert failed: {response.text}")
 

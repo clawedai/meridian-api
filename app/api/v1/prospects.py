@@ -114,6 +114,7 @@ async def create_prospect(
     """Add a new prospect."""
     user_id = current_user["id"]
     headers = _get_headers()
+    headers["Prefer"] = "return=representation"  # Get created row back
 
     data = {
         **prospect.model_dump(),
