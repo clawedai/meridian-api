@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     SUPABASE_URL: Optional[str] = os.getenv("SUPABASE_URL")
     SUPABASE_KEY: Optional[str] = os.getenv("SUPABASE_KEY")
     SUPABASE_SERVICE_KEY: Optional[str] = os.getenv("SUPABASE_SERVICE_KEY")
+    SUPABASE_PAT: Optional[str] = os.getenv("SUPABASE_PAT")
 
     # JWT
     SECRET_KEY: str = _get_secret_key()

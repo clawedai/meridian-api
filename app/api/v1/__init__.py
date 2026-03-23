@@ -10,6 +10,7 @@ from .pipeline import router as pipeline_router
 from .billing import router as billing_router
 from .me import router as me_router
 from .competitive_groups import router as competitive_groups_router
+from .prospects import router as prospects_router
 
 api_router = APIRouter()
 
@@ -24,3 +25,4 @@ api_router.include_router(pipeline_router)
 api_router.include_router(billing_router)
 api_router.include_router(me_router)
 api_router.include_router(competitive_groups_router)
+api_router.include_router(prospects_router)
