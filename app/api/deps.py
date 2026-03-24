@@ -467,15 +467,36 @@ def get_current_user(
 
     try:
         supabase = get_supabase()
-        user_data = supabase.admin_get_user(user_id)
-        if not user_data:
+        # Query public.users table directly (custom auth — no Supabase Auth dependency)
+        import httpx
+        headers = {
+            "apikey": supabase.anon_key,
+            "Authorization": f"Bearer {supabase.service_key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation",
+        }
+        with httpx.Client(timeout=15.0) as client:
+            resp = client.get(
+                f"{supabase.url}/rest/v1/users?id=eq.{user_id}&select=id,email,full_name,company_name,created_at,updated_at",
+                headers=headers,
+            )
+        if resp.status_code != 200 or not resp.text.strip():
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="User not found",
             )
+        users = resp.json()
+        if not isinstance(users, list) or len(users) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found",
+            )
+        user_data = users[0]
         return {
             "id": user_data.get("id"),
             "email": user_data.get("email"),
+            "full_name": user_data.get("full_name"),
+            "company_name": user_data.get("company_name"),
             "created_at": user_data.get("created_at"),
             "updated_at": user_data.get("updated_at"),
         }

@@ -1,210 +1,323 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+"""
+Custom Authentication — bypasses broken Supabase Auth.
+Uses public.users table as the auth source of truth.
+"""
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
+import uuid
+import logging
+import httpx
+from datetime import datetime, timezone
 
-from ..deps import get_supabase, SupabaseClient, get_current_user
+from ..deps import get_supabase, SupabaseClient
 from ...schemas.user import Token, UserResponse
-from ...core.security import create_access_token
+from ...core.security import create_access_token, verify_password, get_password_hash
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+logger = logging.getLogger(__name__)
+
 
 class RegisterRequest(BaseModel):
-    email: str
+    email: EmailStr
     password: str
     full_name: Optional[str] = None
     company_name: Optional[str] = None
+
 
 class LoginRequest(BaseModel):
     email: str
     password: str
 
+
 @router.post("/register", response_model=Token)
 async def register(
     request: RegisterRequest,
-    supabase: SupabaseClient = Depends(get_supabase)
+    supabase: SupabaseClient = Depends(get_supabase),
 ):
-    """Register a new user"""
-    try:
-        print(f"Starting registration for: {request.email}")
-
-        user_metadata = {}
-        if request.full_name:
-            user_metadata["full_name"] = request.full_name
-        if request.company_name:
-            user_metadata["company_name"] = request.company_name
-
-        print(f"Calling supabase.sign_up...")
-        auth_response = supabase.sign_up(
-            email=request.email,
-            password=request.password,
-            user_metadata=user_metadata if user_metadata else None
+    """Register a new user with email/password"""
+    # Validate password strength
+    if len(request.password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 8 characters",
         )
 
-        print(f"auth_response: {auth_response}")
-
-        # Check for errors - deps.py returns {"error": "message"}
-        if "error" in auth_response:
-            error_msg = auth_response["error"]
-            print(f"Signup error: {error_msg}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg,
+    try:
+        # Check if email already exists — query by email, not all rows
+        check_headers = {
+            "apikey": supabase.anon_key,
+            "Authorization": f"Bearer {supabase.service_key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation",
+        }
+        with httpx.Client(timeout=15.0) as client:
+            existing_resp = client.get(
+                f"{supabase.url}/rest/v1/users?email=eq.{request.email}&select=id",
+                headers=check_headers,
             )
-
-        # Supabase returns the user at the top level (not nested under "user")
-        # The response can be: {"id": ..., "email": ...} or {"error": "..."}
-        user = auth_response.get("user") or auth_response
-
-        if not user or "id" not in user:
-            # Check if it's an error response
-            if "error" in auth_response:
+        if existing_resp.status_code == 200 and existing_resp.text.strip():
+            existing_users = existing_resp.json()
+            if isinstance(existing_users, list) and len(existing_users) > 0:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=auth_response["error"],
+                    detail="An account with this email already exists",
                 )
-            # Generic failure
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to create user",
+
+        # Create user ID
+        user_id = str(uuid.uuid4())
+        password_hash = get_password_hash(request.password)
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Insert into public.users
+        user_row = {
+            "id": user_id,
+            "email": request.email,
+            "full_name": request.full_name or "",
+            "company_name": request.company_name or "",
+            "password_hash": password_hash,
+            "subscription_tier": "starter",
+            "subscription_status": "trialing",
+            "created_at": now,
+            "updated_at": now,
+        }
+        with httpx.Client(timeout=15.0) as client:
+            users_resp = client.post(
+                f"{supabase.url}/rest/v1/users",
+                json=user_row,
+                headers=check_headers,
             )
+        if users_resp.status_code not in (200, 201):
+            logger.error(f"Users insert failed: {users_resp.status_code} — {users_resp.text}")
+            raise HTTPException(status_code=400, detail=f"Failed to create user: {users_resp.text[:100]}")
 
-        session = auth_response.get("session") or {}
-        print(f"User created: {user['id']}")
+        # Insert into public.profiles
+        profile_row = {
+            "id": user_id,
+            "email": request.email,
+            "full_name": request.full_name or "",
+            "company_name": request.company_name or "",
+            "subscription_tier": "starter",
+            "subscription_status": "trialing",
+        }
+        with httpx.Client(timeout=15.0) as client:
+            profiles_resp = client.post(
+                f"{supabase.url}/rest/v1/profiles",
+                json=profile_row,
+                headers=check_headers,
+            )
+        if profiles_resp.status_code not in (200, 201):
+            logger.error(f"Profiles insert failed: {profiles_resp.status_code} — {profiles_resp.text}")
+            raise HTTPException(status_code=400, detail=f"Failed to create profile: {profiles_resp.text[:100]}")
 
-        # Create access token using JWT (your own token for API auth)
-        access_token = create_access_token({"sub": user["id"]})
+        # Generate JWT
+        access_token = create_access_token({"sub": user_id})
+
+        logger.info(f"User registered: {request.email} ({user_id})")
 
         return Token(
             access_token=access_token,
             user=UserResponse(
-                id=user["id"],
-                email=user["email"],
+                id=user_id,
+                email=request.email,
                 full_name=request.full_name,
                 company_name=request.company_name,
-                created_at=user.get("created_at"),
-                updated_at=user.get("updated_at", user.get("created_at")),
-            )
+                created_at=now,
+                updated_at=now,
+            ),
         )
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Registration error for {request.email}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
+            detail=f"Registration failed: {str(e)[:100]}",
         )
+
 
 @router.post("/login", response_model=Token)
 async def login(
     request: LoginRequest,
-    supabase: SupabaseClient = Depends(get_supabase)
+    supabase: SupabaseClient = Depends(get_supabase),
 ):
-    """Login and get access token"""
+    """Login with email/password, returns JWT"""
     try:
-        auth_response = supabase.sign_in(
-            email=request.email,
-            password=request.password
-        )
-
-        # Handle error responses — Supabase can return {"error": ...} or {"error_code": ...}
-        if "error" in auth_response or "error_code" in auth_response:
-            error_code = auth_response.get("error_code", "")
-            error_msg = (
-                auth_response.get("error_description") or
-                auth_response.get("msg") or
-                auth_response.get("error") or
-                "Invalid credentials"
+        # Query public.users for this email
+        headers = {
+            "apikey": supabase.anon_key,
+            "Authorization": f"Bearer {supabase.service_key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation",
+        }
+        with httpx.Client(timeout=15.0) as client:
+            resp = client.get(
+                f"{supabase.url}/rest/v1/users?email=eq.{request.email}&select=*",
+                headers=headers,
             )
-            if error_code == "email_not_confirmed":
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Email not confirmed. Please check your inbox and click the confirmation link.",
-                )
+
+        if resp.status_code != 200 or not resp.text.strip():
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=error_msg,
+                detail="Invalid email or password",
             )
 
-        # Supabase returns user at top level (not nested under "user")
-        session = auth_response.get("session", {})
-        user = auth_response.get("user") or auth_response
-
-        if not user or "id" not in user:
+        users = resp.json()
+        if not isinstance(users, list) or len(users) == 0:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Login failed",
+                detail="Invalid email or password",
             )
 
-        # Create custom JWT for consistent session management (same as register)
-        access_token = create_access_token({"sub": user["id"]})
+        user = users[0]
+        password_hash = user.get("password_hash")
+        if not password_hash:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password",
+            )
+
+        if not verify_password(request.password, password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password",
+            )
+
+        user_id = user["id"]
 
         # Get profile data
         profile_data = {}
         try:
-            profiles = supabase.table("profiles").select("*", token=session.get("access_token")).select("*")
-            if isinstance(profiles, list) and len(profiles) > 0:
-                profile_data = profiles[0]
-            elif isinstance(profiles, dict) and "data" in profiles:
-                profile_data = profiles.get("data", {})
-        except:
+            with httpx.Client(timeout=15.0) as client:
+                profile_resp = client.get(
+                    f"{supabase.url}/rest/v1/profiles?id=eq.{user_id}&select=*",
+                    headers=headers,
+                )
+            if profile_resp.status_code == 200 and profile_resp.text.strip():
+                profiles = profile_resp.json()
+                if isinstance(profiles, list) and len(profiles) > 0:
+                    profile_data = profiles[0]
+        except Exception:
             pass
 
+        # Generate JWT
+        access_token = create_access_token({"sub": user_id})
+
+        logger.info(f"User logged in: {request.email} ({user_id})")
+
         return Token(
-            access_token=access_token,  # Consistent with register endpoint
+            access_token=access_token,
             user=UserResponse(
-                id=user["id"],
-                email=user["email"],
-                full_name=profile_data.get("full_name"),
-                company_name=profile_data.get("company_name"),
+                id=user_id,
+                email=user.get("email", request.email),
+                full_name=user.get("full_name"),
+                company_name=user.get("company_name"),
                 company_industry=profile_data.get("company_industry"),
                 avatar_url=profile_data.get("avatar_url"),
                 subscription_tier=profile_data.get("subscription_tier", "starter"),
                 subscription_status=profile_data.get("subscription_status", "trialing"),
                 created_at=profile_data.get("created_at", user.get("created_at")),
                 updated_at=profile_data.get("updated_at", user.get("updated_at")),
-            )
+            ),
         )
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Login error for {request.email}: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
         )
 
+
 @router.post("/logout")
 async def logout():
-    """Logout current user"""
+    """Logout — client discards the JWT."""
     return {"message": "Logged out successfully"}
+
 
 @router.get("/me", response_model=UserResponse)
 async def get_me(
-    current_user: dict = Depends(get_current_user),
-    supabase: SupabaseClient = Depends(get_supabase)
+    authorization: Optional[str] = Header(None),
+    supabase: SupabaseClient = Depends(get_supabase),
 ):
-    """Get current user profile"""
+    """Get current user profile using JWT"""
+    # Get token from header
+    if not authorization:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authorization header required",
+        )
+    token = authorization[7:] if authorization.startswith("Bearer ") else authorization
+
+    from ...core.security import verify_token
+    payload = verify_token(token)
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        )
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+        )
+
+    # Fetch user + profile
+    headers = {
+        "apikey": supabase.anon_key,
+        "Authorization": f"Bearer {supabase.service_key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
+    import httpx
     try:
-        # Get profile
-        profiles = supabase.table("profiles").select("*", token=current_user.get("id", ""))
+        with httpx.Client(timeout=15.0) as client:
+            user_resp = client.get(
+                f"{supabase.url}/rest/v1/users?id=eq.{user_id}&select=*",
+                headers=headers,
+            )
+            profile_resp = client.get(
+                f"{supabase.url}/rest/v1/profiles?id=eq.{user_id}&select=*",
+                headers=headers,
+            )
+
+        user_data = {}
+        if user_resp.status_code == 200 and user_resp.text.strip():
+            users = user_resp.json()
+            if isinstance(users, list) and len(users) > 0:
+                user_data = users[0]
+
         profile_data = {}
-        if isinstance(profiles, list) and len(profiles) > 0:
-            profile_data = profiles[0]
-        elif isinstance(profiles, dict) and "data" in profiles:
-            profile_data = profiles.get("data", {})
+        if profile_resp.status_code == 200 and profile_resp.text.strip():
+            profiles = profile_resp.json()
+            if isinstance(profiles, list) and len(profiles) > 0:
+                profile_data = profiles[0]
+
+        if not user_data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found",
+            )
 
         return UserResponse(
-            id=current_user.get("id"),
-            email=current_user.get("email"),
-            full_name=profile_data.get("full_name"),
-            company_name=profile_data.get("company_name"),
+            id=user_id,
+            email=user_data.get("email"),
+            full_name=user_data.get("full_name"),
+            company_name=user_data.get("company_name"),
             company_industry=profile_data.get("company_industry"),
             avatar_url=profile_data.get("avatar_url"),
             subscription_tier=profile_data.get("subscription_tier", "starter"),
             subscription_status=profile_data.get("subscription_status", "trialing"),
-            created_at=profile_data.get("created_at", current_user.get("created_at")),
-            updated_at=profile_data.get("updated_at", current_user.get("updated_at")),
+            created_at=profile_data.get("created_at", user_data.get("created_at")),
+            updated_at=profile_data.get("updated_at", user_data.get("updated_at")),
         )
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Get me error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e),
+            detail="Failed to fetch user",
         )
