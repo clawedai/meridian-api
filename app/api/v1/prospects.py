@@ -92,18 +92,19 @@ async def list_prospects(
 
         prospects = response.json()
 
-        # If tier filter requested, join with intent_scores
-        if tier:
-            scored = []
-            for p in prospects:
-                score_data = await _fetch_signal(
-                    settings.SUPABASE_URL, headers, "intent_scores", p["id"]
-                )
-                if score_data and score_data.get("tier") == tier:
-                    scored.append(p)
-            return scored
+        # Always join intent_scores so frontend has scores
+        scored_prospects = []
+        for p in prospects:
+            score_data = await _fetch_signal(
+                settings.SUPABASE_URL, headers, "intent_scores", p["id"]
+            )
+            prospect_data = {**p, "intent_score": score_data}
 
-        return prospects
+            # If tier filter, only include matching
+            if tier is None or (score_data and score_data.get("tier") == tier):
+                scored_prospects.append(prospect_data)
+
+        return scored_prospects
 
 
 @router.get("/hot")

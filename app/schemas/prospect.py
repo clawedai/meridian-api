@@ -19,6 +19,8 @@ class ProspectBase(BaseModel):
     phone: Optional[str] = None
     location: Optional[str] = None
     source: str = "manual"
+    prospect_type: str = "prospect"  # prospect | client | competitor
+    notes: Optional[str] = None
 
 
 class ProspectCreate(ProspectBase):
@@ -48,6 +50,7 @@ class ProspectResponse(ProspectBase):
     last_enriched_at: Optional[datetime] = None
     suppressed: bool = False
     created_at: datetime
+    intent_score: Optional[dict] = None  # Joined intent_score data
 
     class Config:
         from_attributes = True
