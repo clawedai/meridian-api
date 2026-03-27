@@ -114,10 +114,21 @@ class Settings(BaseSettings):
     STRIPE_SECRET_KEY: Optional[str] = os.getenv("STRIPE_SECRET_KEY")
     STRIPE_WEBHOOK_SECRET: Optional[str] = os.getenv("STRIPE_WEBHOOK_SECRET")
 
+    # Meta Ads Library API
+    META_APP_ID: Optional[str] = os.getenv("META_APP_ID")
+    META_APP_SECRET: Optional[str] = os.getenv("META_APP_SECRET")
+
+    # Reddit API (optional — public endpoints work without auth)
+    REDDIT_CLIENT_ID: Optional[str] = os.getenv("REDDIT_CLIENT_ID")
+    REDDIT_CLIENT_SECRET: Optional[str] = os.getenv("REDDIT_CLIENT_SECRET")
+
     # Sentry Error Monitoring
     SENTRY_DSN: Optional[str] = os.getenv("SENTRY_DSN")
     SENTRY_TRACES_SAMPLE_RATE: float = float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1"))
     SENTRY_PROFILES_SAMPLE_RATE: float = float(os.getenv("SENTRY_PROFILES_SAMPLE_RATE", "0.1"))
+
+    # Alert Engine
+    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
     class Config:
         env_file = ".env"

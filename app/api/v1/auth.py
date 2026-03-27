@@ -5,6 +5,7 @@ Uses public.users table as the auth source of truth.
 from fastapi import APIRouter, Depends, HTTPException, status, Header
 from typing import Optional
 from pydantic import BaseModel, EmailStr
+import asyncio
 import uuid
 import logging
 import httpx
@@ -51,8 +52,8 @@ async def register(
             "Content-Type": "application/json",
             "Prefer": "return=representation",
         }
-        with httpx.Client(timeout=15.0) as client:
-            existing_resp = client.get(
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            existing_resp = await client.get(
                 f"{supabase.url}/rest/v1/users?email=eq.{request.email}&select=id",
                 headers=check_headers,
             )
@@ -81,8 +82,8 @@ async def register(
             "created_at": now,
             "updated_at": now,
         }
-        with httpx.Client(timeout=15.0) as client:
-            users_resp = client.post(
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            users_resp = await client.post(
                 f"{supabase.url}/rest/v1/users",
                 json=user_row,
                 headers=check_headers,
@@ -100,8 +101,8 @@ async def register(
             "subscription_tier": "starter",
             "subscription_status": "trialing",
         }
-        with httpx.Client(timeout=15.0) as client:
-            profiles_resp = client.post(
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            profiles_resp = await client.post(
                 f"{supabase.url}/rest/v1/profiles",
                 json=profile_row,
                 headers=check_headers,
@@ -150,8 +151,8 @@ async def login(
             "Content-Type": "application/json",
             "Prefer": "return=representation",
         }
-        with httpx.Client(timeout=15.0) as client:
-            resp = client.get(
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
                 f"{supabase.url}/rest/v1/users?email=eq.{request.email}&select=*",
                 headers=headers,
             )
@@ -188,8 +189,8 @@ async def login(
         # Get profile data
         profile_data = {}
         try:
-            with httpx.Client(timeout=15.0) as client:
-                profile_resp = client.get(
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                profile_resp = await client.get(
                     f"{supabase.url}/rest/v1/profiles?id=eq.{user_id}&select=*",
                     headers=headers,
                 )
@@ -271,16 +272,17 @@ async def get_me(
         "Content-Type": "application/json",
         "Prefer": "return=representation",
     }
-    import httpx
     try:
-        with httpx.Client(timeout=15.0) as client:
-            user_resp = client.get(
-                f"{supabase.url}/rest/v1/users?id=eq.{user_id}&select=*",
-                headers=headers,
-            )
-            profile_resp = client.get(
-                f"{supabase.url}/rest/v1/profiles?id=eq.{user_id}&select=*",
-                headers=headers,
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            user_resp, profile_resp = await asyncio.gather(
+                client.get(
+                    f"{supabase.url}/rest/v1/users?id=eq.{user_id}&select=*",
+                    headers=headers,
+                ),
+                client.get(
+                    f"{supabase.url}/rest/v1/profiles?id=eq.{user_id}&select=*",
+                    headers=headers,
+                ),
             )
 
         user_data = {}

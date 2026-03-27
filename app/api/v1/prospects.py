@@ -23,6 +23,7 @@ from ...services.funding_signals import detect_funding_round, check_linkedin_job
 from ...services.technographics import detect_technographics, check_technographic_gap
 from ...services.review_scraper import scrape_all_competitors
 from ...services.intent_scoring import calculate_intent_score, get_score_description, should_trigger_alert
+from ...services.score_service import recalculate_score
 from ...core.config import settings
 
 router = APIRouter(prefix="/prospects", tags=["Prospects"])
@@ -323,7 +324,7 @@ async def scrape_prospect(
         await client.patch(update_url, json={"last_enriched_at": "now()"}, headers=headers)
 
     # Recalculate intent score
-    await _recalculate_score(prospect_id, headers)
+    await recalculate_score(prospect_id, headers)
 
     return {
         "prospect_id": prospect_id,
@@ -374,7 +375,7 @@ async def enrich_technographics(
     gap = check_technographic_gap(tech_data.get("tools", []))
 
     # Update intent score with technographic signal
-    await _recalculate_score(prospect_id, headers, technographic_signal=gap.get("fit") == "high")
+    await recalculate_score(prospect_id, headers, technographic_signal=gap.get("fit") == "high")
 
     return {
         "prospect_id": prospect_id,
@@ -423,7 +424,7 @@ async def scrape_reviews(
 
     # Update score
     has_switching = any(r.get("switching_intent", False) for r in reviews)
-    await _recalculate_score(prospect_id, headers, review_signal=has_switching)
+    await recalculate_score(prospect_id, headers, review_signal=has_switching)
 
     return {
         "prospect_id": prospect_id,
@@ -485,87 +486,3 @@ async def generate_email_draft(
     return email
 
 
-
-
-# =============================================
-# INTERNAL HELPERS
-# =============================================
-
-async def _recalculate_score(
-    prospect_id: str,
-    headers: dict,
-    funding_signal: bool = False,
-    hiring_signal: bool = False,
-    review_signal: bool = False,
-    technographic_signal: bool = False,
-    linkedin_signal: bool = False,
-):
-    """Recalculate and update intent score for a prospect."""
-    # Fetch all signal data
-    funding_url = f"{settings.SUPABASE_URL}/rest/v1/funding_signals?prospect_id=eq.{prospect_id}&limit=1"
-    pain_url = f"{settings.SUPABASE_URL}/rest/v1/pain_points?prospect_id=eq.{prospect_id}&order=extracted_at.desc&limit=10"
-    review_url = f"{settings.SUPABASE_URL}/rest/v1/review_signals?prospect_id=eq.{prospect_id}&limit=1"
-    tech_url = f"{settings.SUPABASE_URL}/rest/v1/technographics?prospect_id=eq.{prospect_id}&limit=20"
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        funding_resp = await client.get(funding_url, headers=headers)
-        pain_resp = await client.get(pain_url, headers=headers)
-        review_resp = await client.get(review_url, headers=headers)
-        tech_resp = await client.get(tech_url, headers=headers)
-
-    funding_data = funding_resp.json() if funding_resp.status_code == 200 else []
-    pain_data = pain_resp.json() if pain_resp.status_code == 200 else []
-    review_data = review_resp.json() if review_resp.status_code == 200 else []
-    tech_data = tech_resp.json() if tech_resp.status_code == 200 else []
-
-    # Determine signals from data
-    has_funding = any(f.get("funding_stage") != "hiring" for f in funding_data)
-    has_hiring = any(f.get("funding_stage") == "hiring" for f in funding_data)
-    has_review = len(review_data) > 0
-    has_switching = any(r.get("switching_intent", False) for r in review_data)
-    has_pain = any(p.get("sentiment") in ["negative", "frustrated"] for p in pain_data)
-    has_frustrated = any(p.get("sentiment") == "frustrated" for p in pain_data)
-    has_tech_gap = technographic_signal
-
-    # Get existing score
-    existing = await _fetch_signal(settings.SUPABASE_URL, headers, "intent_scores", prospect_id)
-    existing_score = existing.get("score", 0.0) if existing else 0.0
-
-    # Calculate new score
-    score_result = calculate_intent_score(
-        funding_signal=has_funding or funding_signal,
-        hiring_signal=has_hiring or hiring_signal,
-        review_signal=has_review or review_signal,
-        review_switching_intent=has_switching,
-        linkedin_pain=has_pain,
-        linkedin_frustrated=has_frustrated,
-        technographic_signal=has_tech_gap,
-        existing_score=existing_score,
-        score_breakdown=existing.get("score_breakdown", {}) if existing else None,
-    )
-
-    # Upsert intent_scores
-    score_data = {
-        "prospect_id": prospect_id,
-        "score": score_result["score"],
-        "tier": score_result["tier"],
-        "funding_signal": score_result["funding_signal"],
-        "hiring_signal": score_result["hiring_signal"],
-        "review_signal": score_result["review_signal"],
-        "linkedin_signal": score_result["linkedin_signal"],
-        "technographic_signal": score_result["technographic_signal"],
-        "website_visit_signal": score_result["website_visit_signal"],
-        "score_breakdown": score_result["score_breakdown"],
-        "last_updated_at": "now()",
-    }
-
-    if existing:
-        url = f"{settings.SUPABASE_URL}/rest/v1/intent_scores?prospect_id=eq.{prospect_id}"
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            await client.patch(url, json=score_data, headers=headers)
-    else:
-        url = f"{settings.SUPABASE_URL}/rest/v1/intent_scores"
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            await client.post(url, json=score_data, headers=headers)
-
-    return score_result

@@ -17,6 +17,7 @@ from ...services.linkedin_session import (
     get_linkedin_manager,
     encrypt_cookies, decrypt_cookies,
 )
+from ...services.score_service import recalculate_score
 from ...core.config import settings
 
 router = APIRouter(prefix="/linkedin", tags=["LinkedIn"])
@@ -208,7 +209,7 @@ async def linkedin_scrape(
             )
 
     # Recalculate score
-    await _recalculate_score(request.prospect_id, hdrs)
+    await recalculate_score(request.prospect_id, hdrs, linkedin_signal=True)
 
     logger.info(f"LinkedIn scrape: prospect={request.prospect_id}, posts={posts_stored}, hiring={result.hiring_signals.get('hiring_active')}")
     return LinkedInScrapeResponse(
@@ -231,83 +232,3 @@ async def linkedin_logout(current_user: dict = Depends(get_current_user)):
         )
     return {"message": "LinkedIn session deleted"}
 
-
-async def _recalculate_score(prospect_id: str, hdrs: dict):
-    """Recalculate intent score for a prospect after scraping."""
-    from ...services.intent_scoring import calculate_intent_score
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        funding_r = await client.get(
-            f"{settings.SUPABASE_URL}/rest/v1/funding_signals?prospect_id=eq.{prospect_id}&select=*",
-            headers=hdrs,
-        )
-        pain_r = await client.get(
-            f"{settings.SUPABASE_URL}/rest/v1/pain_points?prospect_id=eq.{prospect_id}&select=*",
-            headers=hdrs,
-        )
-        posts_r = await client.get(
-            f"{settings.SUPABASE_URL}/rest/v1/linkedin_posts?prospect_id=eq.{prospect_id}&select=*",
-            headers=hdrs,
-        )
-        tech_r = await client.get(
-            f"{settings.SUPABASE_URL}/rest/v1/technographics?prospect_id=eq.{prospect_id}&select=*",
-            headers=hdrs,
-        )
-
-    funding = funding_r.json() if funding_r.status_code == 200 else []
-    pain = pain_r.json() if pain_r.status_code == 200 else []
-    posts = posts_r.json() if posts_r.status_code == 200 else []
-    tech = tech_r.json() if tech_r.status_code == 200 else []
-
-    funding_list = funding if isinstance(funding, list) else []
-    pain_list = pain if isinstance(pain, list) else []
-    posts_list = posts if isinstance(posts, list) else []
-    tech_list = tech if isinstance(tech, list) else []
-
-    has_funding = any(s.get("funding_stage") and s.get("funding_stage") != "hiring" for s in funding_list)
-    has_hiring = any(s.get("funding_stage") == "hiring" for s in funding_list)
-    has_frustrated = any(p.get("sentiment") in ("frustrated", "negative") for p in pain_list)
-    has_posts = len(posts_list) > 0
-    has_tech_gap = len(tech_list) > 0
-
-    score_data = calculate_intent_score(
-        funding_signal=has_funding,
-        hiring_signal=has_hiring,
-        review_signal=False,
-        review_switching_intent=False,
-        linkedin_pain=has_frustrated,
-        linkedin_frustrated=has_frustrated,
-        technographic_signal=has_tech_gap,
-        website_visit=False,
-    )
-
-    has_linkedin_signal = has_posts or has_frustrated
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        existing = await client.get(
-            f"{settings.SUPABASE_URL}/rest/v1/intent_scores?prospect_id=eq.{prospect_id}&select=id",
-            headers=hdrs,
-        )
-        if existing.status_code == 200 and existing.text.strip():
-            await client.patch(
-                f"{settings.SUPABASE_URL}/rest/v1/intent_scores?prospect_id=eq.{prospect_id}",
-                json={
-                    "score": score_data["score"],
-                    "tier": score_data["tier"],
-                    "linkedin_signal": has_linkedin_signal,
-                    "score_breakdown": score_data["score_breakdown"],
-                    "last_updated_at": "now()",
-                },
-                headers=hdrs,
-            )
-        else:
-            await client.post(
-                f"{settings.SUPABASE_URL}/rest/v1/intent_scores",
-                json={
-                    "prospect_id": prospect_id,
-                    "score": score_data["score"],
-                    "tier": score_data["tier"],
-                    "linkedin_signal": has_linkedin_signal,
-                    "score_breakdown": score_data["score_breakdown"],
-                },
-                headers=hdrs,
-            )

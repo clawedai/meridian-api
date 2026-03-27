@@ -16,6 +16,7 @@ class ProspectBase(BaseModel):
     company_domain: Optional[str] = None
     linkedin_url: Optional[str] = None
     twitter_handle: Optional[str] = None
+    instagram_handle: Optional[str] = None
     phone: Optional[str] = None
     location: Optional[str] = None
     source: str = "manual"
@@ -37,6 +38,7 @@ class ProspectUpdate(BaseModel):
     company_domain: Optional[str] = None
     linkedin_url: Optional[str] = None
     twitter_handle: Optional[str] = None
+    instagram_handle: Optional[str] = None
     phone: Optional[str] = None
     location: Optional[str] = None
     suppressed: Optional[bool] = None
@@ -140,6 +142,9 @@ class IntentScoreResponse(BaseModel):
     linkedin_signal: bool = False
     technographic_signal: bool = False
     website_visit_signal: bool = False
+    meta_ad_signal: bool = False
+    reddit_signal: bool = False
+    instagram_signal: bool = False
     last_updated_at: datetime
     score_breakdown: dict = {}
 
@@ -156,6 +161,9 @@ class IntentScoreUpdate(BaseModel):
     linkedin_signal: Optional[bool] = None
     technographic_signal: Optional[bool] = None
     website_visit_signal: Optional[bool] = None
+    meta_ad_signal: Optional[bool] = None
+    reddit_signal: Optional[bool] = None
+    instagram_signal: Optional[bool] = None
     score_breakdown: Optional[dict] = None
 
 
@@ -240,6 +248,25 @@ SCORE_WEIGHTS = {
     "linkedin_frustrated": 15,  # Frustrated sentiment
     "technographic": 5,       # Using CRM but no sales intel tool
     "website_visit": 30,      # Visited pricing page
+    # Meta Ad signals (Module 05 extension)
+    "meta_ad_active": 25,      # Active ads in last 30 days
+    "meta_ad_intensity": 15,   # 3+ ads OR >21 days running
+    "meta_ad_lead_gen": 10,    # Lead gen ad format
+    "meta_ad_recency": 5,      # First seen within 7 days
+    # Reddit signals (Module 05 extension)
+    "reddit_ad_active": 20,        # Company advertising on Reddit
+    "reddit_organic_active": 10,  # Active Reddit mentions (5+ posts)
+    "reddit_positive_sentiment": 10,  # Positive Reddit community sentiment
+    "reddit_intensity": 5,         # 10+ mentions OR 50+ upvotes
+    # Google Ads signals (Module 05 extension)
+    "google_ad_active": 20,          # Company advertising on Google
+    "google_ad_intensity": 15,       # 3+ campaigns OR high ad volume
+    "google_ad_keyword_themes": 10,  # 3+ high-intent B2B keywords found
+    # Instagram organic signals (Module 18)
+    "instagram_active": 15,          # Active Instagram presence
+    "instagram_engagement": 10,      # Avg engagement > 3%
+    "instagram_posting_frequency": 10,  # Posts at least 3x per week
+    "instagram_follower_growth": 5,   # Follower count > 1000
 }
 
 # Tier thresholds

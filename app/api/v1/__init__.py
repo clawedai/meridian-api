@@ -12,6 +12,11 @@ from .me import router as me_router
 from .competitive_groups import router as competitive_groups_router
 from .prospects import router as prospects_router
 from .linkedin import router as linkedin_router
+from .meta_ads import router as meta_ads_router
+from .reddit import router as reddit_router
+from .google_ads import router as google_ads_router
+from .bulk_import import router as bulk_import_router
+from .instagram import router as instagram_router
 
 api_router = APIRouter()
 
@@ -28,3 +33,8 @@ api_router.include_router(me_router)
 api_router.include_router(competitive_groups_router)
 api_router.include_router(prospects_router)
 api_router.include_router(linkedin_router)
+api_router.include_router(meta_ads_router)
+api_router.include_router(reddit_router)
+api_router.include_router(google_ads_router)
+api_router.include_router(bulk_import_router)
+api_router.include_router(instagram_router)

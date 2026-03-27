@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from typing import List, Optional
 import httpx
 import logging
 from datetime import datetime, timedelta
-from ..deps import get_current_user, get_supabase, SupabaseClient
+from ..deps import get_current_user, get_supabase, SupabaseClient, get_supabase_service_client
 
 logger = logging.getLogger(__name__)
 from ...schemas.entity import AlertCreate, AlertUpdate, AlertResponse
@@ -685,4 +685,152 @@ async def check_insight_against_alerts(
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Notification Alert Endpoints (prospect-level score_spike / tier_change)
+# ============================================================================
+
+@router.get("/notification-alerts")
+async def list_notification_alerts(
+    limit: int = Query(20, ge=1, le=100),
+    alert_type: Optional[str] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """List recent notification alerts for the current user (score_spike, tier_change)."""
+    try:
+        user_id = current_user["id"]
+        client = get_supabase_service_client()
+
+        params = [
+            f"user_id=eq.{user_id}",
+            "order=created_at.desc",
+            f"limit={limit}",
+        ]
+        if alert_type:
+            params.append(f"type=eq.{alert_type}")
+
+        headers = client._get_admin_headers()
+        headers["Prefer"] = "return=representation"
+
+        url = client.build_url("alerts", params)
+
+        async with httpx.AsyncClient(timeout=15.0) as http:
+            response = await http.get(url, headers=headers)
+
+        if response.status_code == 200:
+            return response.json()
+        logger.warning(f"list_notification_alerts: {response.status_code} - {response.text}")
+        return []
+    except Exception as e:
+        logger.error(f"list_notification_alerts: {e}")
+        return []
+
+
+@router.get("/notification-alerts/count")
+async def get_notification_alert_count(current_user: dict = Depends(get_current_user)):
+    """Get count of unread notification alerts."""
+    try:
+        user_id = current_user["id"]
+        client = get_supabase_service_client()
+
+        headers = client._get_admin_headers()
+        headers["Prefer"] = "return=representation"
+
+        params = [
+            f"user_id=eq.{user_id}",
+            "read=eq.false",
+            "select=id",
+        ]
+        url = client.build_url("alerts", params)
+
+        async with httpx.AsyncClient(timeout=15.0) as http:
+            response = await http.get(url, headers=headers)
+
+        if response.status_code == 200:
+            data = response.json()
+            return {"count": len(data)}
+        return {"count": 0}
+    except Exception as e:
+        logger.error(f"get_notification_alert_count: {e}")
+        return {"count": 0}
+
+
+@router.post("/notification-alerts/{alert_id}/read")
+async def mark_notification_alert_read(
+    alert_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Mark a single notification alert as read."""
+    try:
+        user_id = current_user["id"]
+        client = get_supabase_service_client()
+
+        headers = client._get_admin_headers()
+        headers["Prefer"] = "return=minimal"
+
+        params = [f"id=eq.{alert_id}", f"user_id=eq.{user_id}"]
+        url = client.build_url("alerts", params)
+
+        async with httpx.AsyncClient(timeout=15.0) as http:
+            response = await http.patch(url, json={"read": True}, headers=headers)
+
+        if response.status_code not in (200, 204):
+            logger.warning(f"mark_notification_alert_read: {response.status_code} - {response.text}")
+
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"mark_notification_alert_read: {e}")
+        return {"success": True}
+
+
+@router.post("/notification-alerts/read-all")
+async def mark_all_notification_alerts_read(current_user: dict = Depends(get_current_user)):
+    """Mark all notification alerts as read for the current user."""
+    try:
+        user_id = current_user["id"]
+        client = get_supabase_service_client()
+
+        headers = client._get_admin_headers()
+        headers["Prefer"] = "return=minimal"
+
+        params = [f"user_id=eq.{user_id}", "read=eq.false"]
+        url = client.build_url("alerts", params)
+
+        async with httpx.AsyncClient(timeout=15.0) as http:
+            response = await http.patch(url, json={"read": True}, headers=headers)
+
+        if response.status_code not in (200, 204):
+            logger.warning(f"mark_all_notification_alerts_read: {response.status_code} - {response.text}")
+
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"mark_all_notification_alerts_read: {e}")
+        return {"success": True}
+
+
+# ============================================================================
+# Alert Engine — Manual Trigger
+# ============================================================================
+
+@router.post("/alert-engine/trigger")
+async def trigger_alert_engine(
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Manually trigger one Alert Engine cycle.
+    Runs score-change detection across all prospects immediately.
+    Returns the cycle summary (prospects checked, alerts fired, emails sent).
+    """
+    try:
+        from app.services.alert_engine import AlertEngine
+        engine = AlertEngine()
+        summary = await engine.run_cycle()
+        return {
+            "message": "Alert engine cycle complete",
+            "summary": summary,
+        }
+    except Exception as e:
+        logger.error(f"alert_engine/trigger: {e}")
         raise HTTPException(status_code=500, detail=str(e))

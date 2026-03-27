@@ -56,10 +56,10 @@ def client(mock_user: dict[str, Any], mock_httpx_async_client) -> Generator[Test
     Patches httpx.AsyncClient in each API module's namespace so the mock
     is used during actual test execution (not just during construction).
     """
-    def override_get_current_user():
+    async def override_get_current_user():
         return mock_user
 
-    def override_get_user_context():
+    async def override_get_user_context():
         return {
             "user_id": mock_user["id"],
             "user_token": "mock_token",
@@ -81,6 +81,10 @@ def client(mock_user: dict[str, Any], mock_httpx_async_client) -> Generator[Test
         patch("app.api.v1.reports.httpx.AsyncClient", return_value=mock_httpx_async_client),
         patch("app.api.v1.me.httpx.AsyncClient", return_value=mock_httpx_async_client),
         patch("app.api.v1.competitive_groups.httpx.AsyncClient", return_value=mock_httpx_async_client),
+        patch("app.api.v1.auth.httpx.AsyncClient", return_value=mock_httpx_async_client),
+        patch("app.api.v1.prospects.httpx.AsyncClient", return_value=mock_httpx_async_client),
+        patch("app.api.v1.linkedin.httpx.AsyncClient", return_value=mock_httpx_async_client),
+        patch("app.services.score_service.httpx.AsyncClient", return_value=mock_httpx_async_client),
     ]
 
     for p in patches:

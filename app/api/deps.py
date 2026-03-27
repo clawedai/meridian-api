@@ -1,8 +1,12 @@
+import logging
 from fastapi import Depends, HTTPException, status, Header
 from typing import Optional, List, Dict, Any
 import httpx
 from ..core.config import settings
 from ..core.security import verify_token
+from ..db.database import get_service_client
+
+logger = logging.getLogger(__name__)
 
 # Shared async client for concurrent requests
 _http_async_client: Optional[httpx.AsyncClient] = None
@@ -74,18 +78,16 @@ class SupabaseClient:
         if user_metadata:
             data["options"] = {"data": user_metadata}
 
-        print(f"DEBUG: Sending signup request to {url}")
-        print(f"DEBUG: Payload: {data}")
+        logger.debug(f"Sending signup request to {url}")
+        logger.debug(f"Payload: email={email}")
 
         try:
             with httpx.Client(timeout=30.0) as client:
                 response = client.post(url, json=data, headers=self._get_headers())
-                # Log for debugging
-                print(f"DEBUG: Response status: {response.status_code}")
-                print(f"DEBUG: Response body: {response.text}")
+                logger.debug(f"Response status: {response.status_code}")
+                logger.debug(f"Response body: {response.text[:200]}")
 
                 if response.status_code >= 400:
-                    # Return error format
                     try:
                         error_data = response.json()
                         error_msg = (
@@ -100,21 +102,18 @@ class SupabaseClient:
                         return {"error": f"HTTP {response.status_code}: {response.text}"}
 
                 result = response.json()
-                print(f"DEBUG: Parsed JSON: {result}")
+                logger.debug(f"Parsed JSON: {result}")
 
-                # Check what we got
                 if "user" in result:
-                    print(f"DEBUG: User found in response")
+                    logger.debug("User found in response")
                 elif "error" in result:
-                    print(f"DEBUG: Error found in response")
+                    logger.debug("Error found in response")
                 else:
-                    print(f"DEBUG: Unexpected response format!")
+                    logger.debug("Unexpected response format")
 
                 return result
         except Exception as e:
-            print(f"DEBUG: Exception: {type(e).__name__}: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.warning(f"Signup request exception: {type(e).__name__}: {e}")
             return {"error": str(e)}
 
     async def async_sign_up(self, email: str, password: str, user_metadata: dict = None):
@@ -127,18 +126,16 @@ class SupabaseClient:
         if user_metadata:
             data["options"] = {"data": user_metadata}
 
-        print(f"DEBUG: Sending signup request to {url}")
-        print(f"DEBUG: Payload: {data}")
+        logger.debug(f"Sending signup request to {url}")
+        logger.debug(f"Payload: email={email}")
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(url, json=data, headers=self._get_headers())
-                # Log for debugging
-                print(f"DEBUG: Response status: {response.status_code}")
-                print(f"DEBUG: Response body: {response.text}")
+                logger.debug(f"Response status: {response.status_code}")
+                logger.debug(f"Response body: {response.text[:200]}")
 
                 if response.status_code >= 400:
-                    # Return error format
                     try:
                         error_data = response.json()
                         error_msg = (
@@ -153,21 +150,18 @@ class SupabaseClient:
                         return {"error": f"HTTP {response.status_code}: {response.text}"}
 
                 result = response.json()
-                print(f"DEBUG: Parsed JSON: {result}")
+                logger.debug(f"Parsed JSON: {result}")
 
-                # Check what we got
                 if "user" in result:
-                    print(f"DEBUG: User found in response")
+                    logger.debug("User found in response")
                 elif "error" in result:
-                    print(f"DEBUG: Error found in response")
+                    logger.debug("Error found in response")
                 else:
-                    print(f"DEBUG: Unexpected response format!")
+                    logger.debug("Unexpected response format")
 
                 return result
         except Exception as e:
-            print(f"DEBUG: Exception: {type(e).__name__}: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.warning(f"Signup request exception: {type(e).__name__}: {e}")
             return {"error": str(e)}
 
     def sign_in(self, email: str, password: str):
@@ -436,7 +430,7 @@ def get_supabase() -> SupabaseClient:
         _supabase = SupabaseClient()
     return _supabase
 
-def get_current_user(
+async def get_current_user(
     authorization: Optional[str] = Header(None),
 ) -> dict:
     """Get current authenticated user from JWT token"""
@@ -468,15 +462,14 @@ def get_current_user(
     try:
         supabase = get_supabase()
         # Query public.users table directly (custom auth — no Supabase Auth dependency)
-        import httpx
         headers = {
             "apikey": supabase.anon_key,
             "Authorization": f"Bearer {supabase.service_key}",
             "Content-Type": "application/json",
             "Prefer": "return=representation",
         }
-        with httpx.Client(timeout=15.0) as client:
-            resp = client.get(
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
                 f"{supabase.url}/rest/v1/users?id=eq.{user_id}&select=id,email,full_name,company_name,created_at,updated_at",
                 headers=headers,
             )
@@ -509,7 +502,7 @@ def get_current_user(
         )
 
 
-def get_user_context(
+async def get_user_context(
     current_user: dict = Depends(get_current_user),
     authorization: Optional[str] = Header(None),
 ) -> dict:
@@ -529,3 +522,8 @@ def get_user_context(
         "user_id": current_user["id"],
         "user_token": token,
     }
+
+
+def get_supabase_service_client():
+    """Admin Supabase client using service role key — bypasses RLS."""
+    return get_service_client()
